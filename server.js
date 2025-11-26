@@ -14,9 +14,15 @@ const { sendAssignmentEmails } = require('./utils/mailer');
 const app = express();
 
 const PORT = process.env.PORT || 1225;
-const USERS_FILE = path.join(__dirname, 'data', 'users.json');
-const DRAW_FILE = path.join(__dirname, 'data', 'draw.json');
-const EXCL_FILE = path.join(__dirname, 'data', 'exclusions.json');
+// Where to store JSON data (users/draw/exclusions).
+// On your laptop this will still be ./data.
+// On Render we’ll point DATA_DIR to the mounted disk.
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+
+const USERS_FILE = path.join(DATA_DIR, 'users.json');
+const DRAW_FILE = path.join(DATA_DIR, 'draw.json');
+const EXCL_FILE = path.join(DATA_DIR, 'exclusions.json');
+
 
 // Middleware
 app.use(express.json());
