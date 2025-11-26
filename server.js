@@ -7,22 +7,18 @@ const session = require('express-session');
 const bcrypt = require('bcrypt');
 const { v4: uuidv4 } = require('uuid');
 
-const { readJson, writeJson } = require('./utils/db');
+const {
+    initDb,
+    getUsersCollection,
+    getDrawCollection,
+    getExclusionsCollection
+} = require('./utils/mongo');
 const { runDraw } = require('./utils/draw');
 const { sendAssignmentEmails } = require('./utils/mailer');
 
 const app = express();
 
 const PORT = process.env.PORT || 1225;
-// Where to store JSON data (users/draw/exclusions).
-// On your laptop this will still be ./data.
-// On Render we’ll point DATA_DIR to the mounted disk.
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
-
-const USERS_FILE = path.join(DATA_DIR, 'users.json');
-const DRAW_FILE = path.join(DATA_DIR, 'draw.json');
-const EXCL_FILE = path.join(DATA_DIR, 'exclusions.json');
-
 
 // Middleware
 app.use(express.json());
@@ -37,38 +33,15 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // Helpers
 
-async function getUsersData() {
-    return readJson(USERS_FILE, { users: [] });
-}
-
-async function saveUsersData(data) {
-    return writeJson(USERS_FILE, data);
-}
-
-async function getDrawData() {
-    return readJson(DRAW_FILE, {
-        status: 'not-run',
-        createdAt: null,
-        assignments: []
-    });
-}
-
-async function saveDrawData(data) {
-    return writeJson(DRAW_FILE, data);
-}
-
-async function getExclusionsData() {
-    return readJson(EXCL_FILE, { exclusions: [] });
-}
-
-async function saveExclusionsData(data) {
-    return writeJson(EXCL_FILE, data);
+function normalizeUser(user) {
+    if (!user) return null;
+    return { ...user, id: user.id || user._id };
 }
 
 async function getCurrentUser(req) {
     if (!req.session.userId) return null;
-    const usersData = await getUsersData();
-    return usersData.users.find(u => u.id === req.session.userId) || null;
+    const user = await getUsersCollection().findOne({ _id: req.session.userId });
+    return normalizeUser(user);
 }
 
 function requireAuth(req, res, next) {
@@ -98,9 +71,9 @@ app.post('/api/auth/register', async (req, res) => {
         }
 
         const emailNorm = String(email).trim().toLowerCase();
-        const usersData = await getUsersData();
+        const usersCol = getUsersCollection();
 
-        const existing = usersData.users.find(u => u.email === emailNorm);
+        const existing = await usersCol.findOne({ email: emailNorm });
         if (existing) {
             return res.status(400).json({ error: 'Email already registered.' });
         }
@@ -108,8 +81,10 @@ app.post('/api/auth/register', async (req, res) => {
         const hash = await bcrypt.hash(password, 10);
         const isAdmin = emailNorm === String(process.env.ADMIN_EMAIL).trim().toLowerCase();
 
+        const newId = uuidv4();
         const newUser = {
-            id: uuidv4(),
+            _id: newId,
+            id: newId, // ensure id field exists for client compatibility
             name: name.trim(),
             email: emailNorm,
             passwordHash: hash,
@@ -118,8 +93,7 @@ app.post('/api/auth/register', async (req, res) => {
             createdAt: new Date().toISOString()
         };
 
-        usersData.users.push(newUser);
-        await saveUsersData(usersData);
+        await usersCol.insertOne(newUser);
 
         req.session.userId = newUser.id;
 
@@ -141,10 +115,10 @@ app.post('/api/auth/login', async (req, res) => {
         const { email, password } = req.body;
         const emailNorm = String(email || '').trim().toLowerCase();
 
-        const usersData = await getUsersData();
-        const user = usersData.users.find(u => u.email === emailNorm);
+        const usersCol = getUsersCollection();
+        const user = await usersCol.findOne({ email: emailNorm });
 
-        if (!user) {
+        if (!user || !user.passwordHash) {
             return res.status(400).json({ error: 'Invalid email or password.' });
         }
 
@@ -153,10 +127,10 @@ app.post('/api/auth/login', async (req, res) => {
             return res.status(400).json({ error: 'Invalid email or password.' });
         }
 
-        req.session.userId = user.id;
+        req.session.userId = user.id || user._id;
 
         res.json({
-            id: user.id,
+            id: user.id || user._id,
             name: user.name,
             email: user.email,
             isAdmin: user.isAdmin
@@ -201,17 +175,19 @@ app.get('/api/me', async (req, res) => {
 app.post('/api/participant/profile', requireAuth, async (req, res) => {
     try {
         const { notes } = req.body;
-        const usersData = await getUsersData();
-        const user = usersData.users.find(u => u.id === req.session.userId);
+        const usersCol = getUsersCollection();
+        const user = await usersCol.findOne({ _id: req.session.userId });
 
         if (!user) {
             return res.status(404).json({ error: 'User not found.' });
         }
 
-        user.notes = notes || '';
-        await saveUsersData(usersData);
+        await usersCol.updateOne(
+            { _id: req.session.userId },
+            { $set: { notes: notes || '' } }
+        );
 
-        res.json({ ok: true, notes: user.notes });
+        res.json({ ok: true, notes: notes || '' });
     } catch (err) {
         console.error('Profile update error:', err);
         res.status(500).json({ error: 'Server error' });
@@ -221,19 +197,26 @@ app.post('/api/participant/profile', requireAuth, async (req, res) => {
 // Participant – get own assignment (only reveals their person)
 app.get('/api/participant/assignment', requireAuth, async (req, res) => {
     try {
-        const drawData = await getDrawData();
+        const drawCol = getDrawCollection();
+        const drawData =
+            (await drawCol.findOne({ _id: 'current' })) || {
+                status: 'not-run',
+                createdAt: null,
+                assignments: []
+            };
         if (drawData.status !== 'completed') {
             return res.json({ hasAssignment: false });
         }
 
-        const usersData = await getUsersData();
-        const assignment = drawData.assignments.find(a => a.giverId === req.session.userId);
+        const assignment = (drawData.assignments || []).find(
+            a => a.giverId === req.session.userId
+        );
 
         if (!assignment) {
             return res.json({ hasAssignment: false });
         }
 
-        const receiver = usersData.users.find(u => u.id === assignment.receiverId);
+        const receiver = await getUsersCollection().findOne({ _id: assignment.receiverId });
         if (!receiver) {
             return res.json({ hasAssignment: false });
         }
@@ -254,9 +237,13 @@ app.get('/api/participant/assignment', requireAuth, async (req, res) => {
 // Admin – overview of participants
 app.get('/api/admin/participants', requireAdmin, async (req, res) => {
     try {
-        const usersData = await getUsersData();
-        const participants = usersData.users.filter(u => !u.isAdmin).map(u => ({
-            id: u.id,
+        const users = await getUsersCollection()
+            .find({ isAdmin: { $ne: true } })
+            .project({ passwordHash: 0 })
+            .toArray();
+
+        const participants = users.map(u => ({
+            id: u.id || u._id,
             name: u.name,
             email: u.email,
             notes: u.notes || ''
@@ -272,10 +259,18 @@ app.get('/api/admin/participants', requireAdmin, async (req, res) => {
 // Admin – get current draw status + assignments (full mapping)
 app.get('/api/admin/assignments', requireAdmin, async (req, res) => {
     try {
-        const drawData = await getDrawData();
-        const usersData = await getUsersData();
+        const drawData =
+            (await getDrawCollection().findOne({ _id: 'current' })) || {
+                status: 'not-run',
+                createdAt: null,
+                assignments: []
+            };
+        const users = await getUsersCollection()
+            .find({})
+            .project({ passwordHash: 0 })
+            .toArray();
 
-        const userById = id => usersData.users.find(u => u.id === id);
+        const userById = id => users.find(u => (u.id || u._id) === id);
 
         const detailedAssignments = drawData.assignments.map(a => {
             const giver = userById(a.giverId);
@@ -302,16 +297,19 @@ app.get('/api/admin/assignments', requireAdmin, async (req, res) => {
 // Admin – get exclusions
 app.get('/api/admin/exclusions', requireAdmin, async (req, res) => {
     try {
-        const exclusionsData = await getExclusionsData();
-        const usersData = await getUsersData();
+        const exclusions = await getExclusionsCollection().find({}).toArray();
+        const users = await getUsersCollection()
+            .find({})
+            .project({ passwordHash: 0 })
+            .toArray();
 
-        const userById = id => usersData.users.find(u => u.id === id);
+        const userById = id => users.find(u => (u.id || u._id) === id);
 
-        const detailed = exclusionsData.exclusions.map(ex => {
+        const detailed = exclusions.map(ex => {
             const a = userById(ex.aId);
             const b = userById(ex.bId);
             return {
-                id: ex.id,
+                id: ex.id || ex._id,
                 aId: ex.aId,
                 bId: ex.bId,
                 aName: a ? a.name : 'Unknown',
@@ -334,24 +332,27 @@ app.post('/api/admin/exclusions', requireAdmin, async (req, res) => {
             return res.status(400).json({ error: 'Invalid exclusion.' });
         }
 
-        const exclusionsData = await getExclusionsData();
+        const exclusionsCol = getExclusionsCollection();
 
-        const exists = exclusionsData.exclusions.some(
-            ex =>
-                (ex.aId === aId && ex.bId === bId) ||
-                (ex.aId === bId && ex.bId === aId)
-        );
+        const exists = await exclusionsCol.findOne({
+            $or: [
+                { aId, bId },
+                { aId: bId, bId: aId }
+            ]
+        });
         if (exists) {
             return res.status(400).json({ error: 'Exclusion already exists.' });
         }
 
-        exclusionsData.exclusions.push({
+        const newExclusion = {
+            _id: uuidv4(),
             id: uuidv4(),
             aId,
             bId
-        });
+        };
+        newExclusion.id = newExclusion._id;
 
-        await saveExclusionsData(exclusionsData);
+        await exclusionsCol.insertOne(newExclusion);
 
         res.json({ ok: true });
     } catch (err) {
@@ -364,15 +365,12 @@ app.post('/api/admin/exclusions', requireAdmin, async (req, res) => {
 app.delete('/api/admin/exclusions/:id', requireAdmin, async (req, res) => {
     try {
         const { id } = req.params;
-        const exclusionsData = await getExclusionsData();
-        const before = exclusionsData.exclusions.length;
-        exclusionsData.exclusions = exclusionsData.exclusions.filter(ex => ex.id !== id);
+        const result = await getExclusionsCollection().deleteOne({ _id: id });
 
-        if (exclusionsData.exclusions.length === before) {
+        if (result.deletedCount === 0) {
             return res.status(404).json({ error: 'Exclusion not found.' });
         }
 
-        await saveExclusionsData(exclusionsData);
         res.json({ ok: true });
     } catch (err) {
         console.error('Exclusion delete error:', err);
@@ -383,20 +381,40 @@ app.delete('/api/admin/exclusions/:id', requireAdmin, async (req, res) => {
 // Admin – run the draw and email everyone
 app.post('/api/admin/run-draw', requireAdmin, async (req, res) => {
     try {
-        const drawData = await getDrawData();
+        const drawCol = getDrawCollection();
+        const drawData =
+            (await drawCol.findOne({ _id: 'current' })) || {
+                status: 'not-run',
+                createdAt: null,
+                assignments: []
+            };
         if (drawData.status === 'completed') {
             return res.status(400).json({ error: 'Draw already completed.' });
         }
 
-        const usersData = await getUsersData();
-        const participants = usersData.users.filter(u => !u.isAdmin);
+        const users = await getUsersCollection()
+            .find({ isAdmin: { $ne: true } })
+            .project({ passwordHash: 0 })
+            .toArray();
+        const participants = users.map(u => ({
+            id: u.id || u._id,
+            name: u.name,
+            email: u.email,
+            notes: u.notes || ''
+        }));
 
         if (participants.length < 2) {
             return res.status(400).json({ error: 'Need at least 2 participants.' });
         }
 
-        const exclusionsData = await getExclusionsData();
-        const assignments = runDraw(participants, exclusionsData.exclusions);
+        const exclusions = await getExclusionsCollection().find({}).toArray();
+        const normalizedExclusions = exclusions.map(ex => ({
+            id: ex.id || ex._id,
+            aId: ex.aId,
+            bId: ex.bId
+        }));
+
+        const assignments = runDraw(participants, normalizedExclusions);
 
         if (!assignments) {
             return res.status(400).json({
@@ -405,12 +423,13 @@ app.post('/api/admin/run-draw', requireAdmin, async (req, res) => {
         }
 
         const newDraw = {
+            _id: 'current',
             status: 'completed',
             createdAt: new Date().toISOString(),
             assignments
         };
 
-        await saveDrawData(newDraw);
+        await drawCol.updateOne({ _id: 'current' }, { $set: newDraw }, { upsert: true });
 
         const emailResult = await sendAssignmentEmails(assignments, participants);
 
@@ -432,6 +451,13 @@ app.get('*', (req, res) => {
 });
 
 // Start
-app.listen(PORT, () => {
-    console.log(`Secret Santa server running on port ${PORT}`);
-});
+initDb()
+    .then(() => {
+        app.listen(PORT, () => {
+            console.log(`Secret Santa server running on port ${PORT}`);
+        });
+    })
+    .catch(err => {
+        console.error('Failed to initialize database:', err);
+        process.exit(1);
+    });
