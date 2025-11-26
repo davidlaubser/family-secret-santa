@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Family Secret Santa 🎄</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700&family=Playfair+Display:wght@600;700&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+
+<body>
+    <header class="top-bar">
+        <div class="logo">
+            🎅 <span>Family Secret Santa</span>
+        </div>
+        <div class="top-actions">
+            <div class="santa-illustration" aria-hidden="true"></div>
+            <button id="logoutBtn" class="btn btn-ghost hidden">Log out</button>
+        </div>
+    </header>
+
+    <main class="main">
+        <!-- Auth view -->
+        <section id="auth-view" class="view">
+            <div class="card card-auth">
+                <div class="tabs">
+                    <button id="tab-login" class="tab active">Sign in</button>
+                    <button id="tab-register" class="tab">Create account</button>
+                </div>
+
+                <form id="loginForm" class="form active">
+                    <h2>Welcome back 🎄</h2>
+                    <label>
+                        Email
+                        <input type="email" name="email" required autocomplete="email">
+                    </label>
+                    <label>
+                        Password
+                        <input type="password" name="password" required autocomplete="current-password">
+                    </label>
+                    <button type="submit" class="btn btn-primary">Sign in</button>
+                    <p class="hint">
+                        First time here? <span class="link" id="goto-register">Create an account</span>
+                    </p>
+                    <p class="form-error" id="loginError"></p>
+                </form>
+
+                <form id="registerForm" class="form">
+                    <h2>Join the Secret Santa 🎁</h2>
+                    <label>
+                        Name
+                        <input type="text" name="name" required>
+                    </label>
+                    <label>
+                        Email
+                        <input type="email" name="email" required autocomplete="email">
+                    </label>
+                    <label>
+                        Password
+                        <input type="password" name="password" required autocomplete="new-password">
+                    </label>
+                    <label>
+                        Preferences / notes (optional)
+                        <textarea name="notes" rows="3"
+                            placeholder="Example: Don't like coffee, allergic to peanuts, shoe size UK9"></textarea>
+                    </label>
+                    <button type="submit" class="btn btn-primary">Create account</button>
+                    <p class="hint">
+                        Already have an account? <span class="link" id="goto-login">Sign in</span>
+                    </p>
+                    <p class="form-error" id="registerError"></p>
+                </form>
+            </div>
+
+            <section class="card card-rules">
+                <h2>How it works</h2>
+                <ol>
+                    <li>Create an account with your name, email and any gift preferences.</li>
+                    <li>If you have any exclusions, e.g. spouses not buying for each other, let me know.</li>
+                    <li>When everyone has signed up, the host (admin) runs the draw.</li>
+                    <li>The system matches each person with someone else, respecting exclusions.</li>
+                    <li>Once the draw is complete, you will be notified via email.</li>
+                    <ul>
+                        <li>You can also log in to view your match details.</li>
+                    </ul>
+                </ol>
+                <h3>Simple rules</h3>
+                <ul>
+                    <li>Keep your person secret.</li>
+                    <li>Stick to the agreed budget of R200.</li>
+                    <li>Add preferences or notes to help your Secret Santa.</li>
+                    <li>Enjoy! 🎄</li>
+                </ul>
+            </section>
+        </section>
+
+        <!-- Participant view -->
+        <section id="participant-view" class="view hidden">
+            <div class="card">
+                <h2 id="participantGreeting">Hi!</h2>
+                <p class="text-muted">
+                    Welcome to the family Secret Santa. This is your personal page.
+                </p>
+            </div>
+
+            <div class="grid">
+                <div class="card">
+                    <h3>Your preferences / wishlist</h3>
+                    <p class="text-muted">
+                        Add a few details to help your Secret Santa choose a great gift.
+                    </p>
+                    <form id="preferencesForm">
+                        <textarea id="preferencesText" rows="5" placeholder="Examples: 
+• Favourite snacks
+• Allergies
+• T-shirt size
+• Hobbies"></textarea>
+                        <button type="submit" class="btn btn-primary">Save preferences</button>
+                    </form>
+                    <p class="form-success" id="preferencesSuccess"></p>
+                    <p class="form-error" id="preferencesError"></p>
+                </div>
+
+                <div class="card">
+                    <h3>Your Secret Santa match</h3>
+                    <p id="assignmentStatus" class="text-muted">
+                        The draw has not been done yet. Check back once the host runs it.
+                    </p>
+                    <button id="revealBtn" class="btn btn-secondary hidden">
+                        Reveal who I am buying for 🎁
+                    </button>
+                    <div id="assignmentResult" class="assignment-result hidden">
+                        <p><strong>You are buying for:</strong> <span id="receiverName"></span></p>
+                        <p><strong>Their notes:</strong></p>
+                        <p id="receiverNotes" class="notes-box"></p>
+                    </div>
+                </div>
+            </div>
+
+            <section class="card card-rules">
+                <h2>Game rules</h2>
+                <ul>
+                    <li>Don’t tell anyone who you got.</li>
+                    <li>Try to follow your person’s notes and preferences.</li>
+                    <li>Stick to the agreed budget of R200.</li>
+                </ul>
+            </section>
+        </section>
+
+        <!-- Admin view -->
+        <section id="admin-view" class="view hidden">
+            <div class="card">
+                <h2>Host dashboard 🎅</h2>
+                <p class="text-muted">
+                    Manage participants, exclusions and run the draw. Only you can see this page.
+                </p>
+            </div>
+
+            <div class="card">
+                <h3>Participants</h3>
+                <p class="text-muted">
+                    Everyone who registered (excluding you) will be part of the draw.
+                </p>
+                <table class="table" id="participantsTable">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Email</th>
+                            <th>Notes</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="grid">
+                <div class="card">
+                    <h3>Exclusions</h3>
+                    <p class="text-muted">
+                        Use this to prevent specific people from being matched (e.g. spouses).
+                    </p>
+                    <form id="exclusionForm" class="exclusion-form">
+                        <label>
+                            Person A
+                            <select id="exclusionA"></select>
+                        </label>
+                        <label>
+                            Cannot be matched with
+                            <select id="exclusionB"></select>
+                        </label>
+                        <button type="submit" class="btn btn-secondary">Add exclusion</button>
+                    </form>
+                    <p class="form-error" id="exclusionError"></p>
+
+                    <h4>Current exclusions</h4>
+                    <ul id="exclusionsList" class="exclusions-list">
+                    </ul>
+                </div>
+
+                <div class="card">
+                    <h3>Run Secret Santa draw</h3>
+                    <p id="drawStatus" class="text-muted">
+                        The draw has not been run yet.
+                    </p>
+                    <button id="runDrawBtn" class="btn btn-primary">
+                        Run draw and email everyone
+                    </button>
+                    <p class="form-error" id="drawError"></p>
+                    <p class="form-success" id="drawSuccess"></p>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>Assignments overview</h3>
+                <p class="text-muted">
+                    This table shows the full Secret Santa mapping. Only the host can see this.
+                </p>
+                <table class="table" id="assignmentsTable">
+                    <thead>
+                        <tr>
+                            <th>Giver</th>
+                            <th>Giver email</th>
+                            <th>Receiver</th>
+                            <th>Receiver email</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <span>Made for family fun 🎄</span>
+    </footer>
+
+    <script src="js/app.js"></script>
+</body>
+
+</html>
